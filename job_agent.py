@@ -1,6 +1,3 @@
-import os
-from dotenv import load_dotenv
-
 import requests
 import smtplib
 
@@ -8,70 +5,60 @@ from email.message import EmailMessage
 
 from langchain.agents import create_agent
 from langchain.tools import tool
-
 from langchain_ollama import ChatOllama
-from langchain.messages import (
-    HumanMessage,
-    AIMessage,
-    AIMessageChunk
-)
 
 
-# ---------------------------------------
-# QWEN MODEL
-# ---------------------------------------
+
+
+ALERT_EMAIL = "receiver_email"
+GMAIL_EMAIL = "sender_email"
+
+
+GMAIL_APP_PASSWORD = "enter_yourkey"
+
+
+
 
 model = ChatOllama(
     model="qwen2.5:3b"
 )
 
 
-
-load_dotenv()
-
-ALERT_EMAIL = os.getenv("ALERT_EMAIL")
-GMAIL_EMAIL = os.getenv("GMAIL_EMAIL")
-GMAIL_APP_PASSWORD = os.getenv("GMAIL_APP_PASSWORD")
-
-
 @tool
-def searchJobs(jobRole, location):
+def searchJobs(jobRole: str, location: str):
     """
-    Searches remote jobs for the given job role.
+    Searches for remote jobs matching the requested job role.
     """
+
+    print("\nSearching jobs...")
 
     url = "https://remotive.com/api/remote-jobs"
 
     params = {
         "search": jobRole,
-        "limit": 5
+        "limit": 10
     }
 
     try:
 
-        print("\nSearching for jobs...\n")
-
         response = requests.get(
             url,
-            params=params
+            params=params,
+            timeout=15
         )
 
         response.raise_for_status()
 
         data = response.json()
 
-        jobs = data.get(
-            "jobs",
-            []
-        )
+        jobs = data.get("jobs", [])
 
         if not jobs:
-
             return "No jobs found."
 
-        result = ""
+        results = []
 
-        for job in jobs[:5]:
+        for job in jobs[:10]:
 
             title = job.get(
                 "title",
@@ -83,14 +70,9 @@ def searchJobs(jobRole, location):
                 "Unknown"
             )
 
-            jobLocation = job.get(
+            job_location = job.get(
                 "candidate_required_location",
                 "Remote"
-            )
-
-            description = job.get(
-                "description",
-                "No description"
             )
 
             link = job.get(
@@ -98,46 +80,50 @@ def searchJobs(jobRole, location):
                 ""
             )
 
-            result += (
-                f"Job Title: {title}\n"
-                f"Company: {company}\n"
-                f"Location: {jobLocation}\n"
-                f"Description: {description[:500]}\n"
-                f"Apply Link: {link}\n"
-                f"--------------------------\n"
+            results.append(
+                f"""
+Job Title: {title}
+Company: {company}
+Location: {job_location}
+Apply Link: {link}
+"""
             )
 
-        return result
+        return "\n--------------------------\n".join(results)
+
+    except requests.exceptions.RequestException as e:
+
+        return f"Job search error: {e}"
 
     except Exception as e:
 
-        return f"Search error: {e}"
+        return f"Unexpected error: {e}"
+
 
 
 
 @tool
-def sendJobAlert(jobDetails):
+def sendJobAlert(jobDetails: str):
     """
-    Automatically sends the job search results
-    to the fixed email address.
+    Sends selected job results to the registered email.
     """
 
-    jobDetails = str(jobDetails)
+    print("\nSending email...")
 
     message = EmailMessage()
 
     message["Subject"] = "AI Job Alert"
-
     message["From"] = GMAIL_EMAIL
-
     message["To"] = ALERT_EMAIL
 
     message.set_content(
-    "AI JOB ALERT\n"
-    "==============================\n\n"
-    "The AI Job Alert Agent found these jobs:\n\n"
-    + str(jobDetails)
-)
+        "AI JOB ALERT\n"
+        "==============================\n\n"
+        "JobBot found the following suitable jobs:\n\n"
+        + str(jobDetails)
+        + "\n\n"
+        "This email was generated automatically by JobBot."
+    )
 
     try:
 
@@ -151,20 +137,15 @@ def sendJobAlert(jobDetails):
                 GMAIL_APP_PASSWORD
             )
 
-            server.send_message(
-                message
-            )
+            server.send_message(message)
 
-        return "Job alert email sent successfully."
+        return "Email sent successfully."
 
     except Exception as e:
 
         return f"Email error: {e}"
 
 
-# ---------------------------------------
-# TOOLS
-# ---------------------------------------
 
 tools = [
     searchJobs,
@@ -172,42 +153,37 @@ tools = [
 ]
 
 
-# ---------------------------------------
-# SYSTEM PROMPT
-# ---------------------------------------
+
 
 system_prompt = """
-You are an AI Job Alert Assistant.
+You are JobBot, a simple AI Job Alert Assistant.
 
-Your name is JobBot.
+Your job is to help the user find relevant jobs.
 
-Your job is to find suitable jobs for the user.
+When the user asks for jobs:
 
-When the user asks to search for jobs:
+1. Identify the job role.
+2. Identify the location if provided.
+3. Use the searchJobs tool.
+4. Review the returned jobs.
+5. Select only jobs relevant to the requested role.
+6. Prefer jobs matching the requested location when location
+   information is available.
+7. Keep the final list short and useful.
+8. Use sendJobAlert to email the selected jobs.
+9. Do not ask for the email address.
+10. After the email is sent, give a short confirmation.
 
-1. Use the searchJobs tool.
-
-2. Analyze the jobs returned by the tool.
-
-3. Select jobs that are relevant to the
-   user's requested role.
-
-4. Automatically use the sendJobAlert tool
-   to send the suitable jobs to the fixed
-   registered email address.
-
-5. Do not ask the user for an email address.
-
-6. After sending the email, tell the user
-   that the job alert was sent.
-
-Keep your response simple.
+IMPORTANT:
+- Do not invent jobs.
+- Do not invent companies.
+- Do not invent application links.
+- Use only jobs returned by the searchJobs tool.
+- Keep the terminal response short.
 """
 
 
-# ---------------------------------------
-# CREATE AGENT
-# ---------------------------------------
+
 
 agent = create_agent(
     model=model,
@@ -217,74 +193,43 @@ agent = create_agent(
 
 
 
-messages = []
+print("=" * 50)
+print("        AI JOB ALERT AGENT")
+print("=" * 50)
 
+print("Type your job request.")
+print("Example:")
+print("Find Java developer jobs in Pune")
+print("Type 'exit' to stop.")
 
 while True:
 
-    query = input(
-        "\nEnter your message: "
-    )
+    query = input("\nYou: ")
 
-    if query.lower() == "exit" or query.lower() == "quit":
+    if query.lower() in ["exit", "quit"]:
+
+        print("\nJobBot: Goodbye!")
         break
 
-    messages.append(
-        HumanMessage(
-            content=query
+    try:
+
+        result = agent.invoke(
+            {
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": query
+                    }
+                ]
+            }
         )
-    )
 
-    aiMessage = ""
+        final_message = result["messages"][-1]
 
-    print("\nJobBot: ", end="")
+        print("\nJobBot:")
+        print(final_message.content)
 
-    # -----------------------------------
-    # STREAMING
-    # -----------------------------------
+    except Exception as e:
 
-    for chunk, metadata in agent.stream(
-        {
-            "messages": messages
-        },
-        stream_mode="messages"
-    ):
-
-        if isinstance(
-            chunk,
-            AIMessageChunk
-        ):
-
-            if isinstance(
-                chunk.content,
-                str
-            ):
-
-                aiMessage += chunk.content
-
-                print(
-                    chunk.content,
-                    end="",
-                    flush=True
-                )
-
-            for tool in chunk.tool_call_chunks:
-
-                toolName = tool.get(
-                    "name"
-                )
-
-                if toolName:
-
-                    print(
-                        f"\nCalling {toolName}...",
-                        flush=True
-                    )
-
-    print()
-
-    messages.append(
-        AIMessage(
-            content=aiMessage
-        )
-    )
+        print("\nJobBot: Something went wrong.")
+        print("Error:", e)
